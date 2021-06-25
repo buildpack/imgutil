@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -498,6 +499,52 @@ func testImage(t *testing.T, when spec.G, it spec.S) {
 					)
 
 					h.AssertNil(t, err)
+				})
+			})
+		})
+
+		when("retry logic", func() {
+			var mockServer *h.MockServer
+
+			when("manifest API in registry returns status code 200", func() {
+				it.Before(func() {
+					mockServer, repoName = h.SetUpMockServer(t, "org/do-not-retry", http.StatusOK, 0)
+				})
+
+				it.After(func() {
+					mockServer.Server().Close()
+				})
+
+				it("does not retry after status code 200", func() {
+					assertExpectedTries(t, mockServer, repoName, 1)
+				})
+			})
+
+			when("manifest API in registry returns status code 404", func() {
+				it.Before(func() {
+					mockServer, repoName = h.SetUpMockServer(t, "org/retry-not-found", http.StatusNotFound, 2)
+				})
+
+				it.After(func() {
+					mockServer.Server().Close()
+				})
+
+				it("retries after status code 404", func() {
+					assertExpectedTries(t, mockServer, repoName, 3)
+				})
+			})
+
+			when("manifest API in registry returns status code 401", func() {
+				it.Before(func() {
+					mockServer, repoName = h.SetUpMockServer(t, "org/retry-unauthorized", http.StatusUnauthorized, 2)
+				})
+
+				it.After(func() {
+					mockServer.Server().Close()
+				})
+
+				it("retries after status code 401", func() {
+					assertExpectedTries(t, mockServer, repoName, 3)
 				})
 			})
 		})
@@ -1597,3 +1644,11 @@ func testImage(t *testing.T, when spec.G, it spec.S) {
 		})
 	})
 }
+
+func assertExpectedTries(t *testing.T, mockServer *h.MockServer, repoName string, expectedCount int) {
+	_, err := remote.NewImage(repoName, authn.DefaultKeychain, remote.WithPreviousImage(repoName))
+
+	h.AssertNil(t, err)
+	h.AssertEq(t, mockServer.ActualCount(), expectedCount)
+}
+
